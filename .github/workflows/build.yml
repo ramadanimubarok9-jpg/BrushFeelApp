@@ -44,8 +44,8 @@ jobs:
                   applicationId 'com.brushfeel.app'
                   minSdk 29
                   targetSdk 34
-                  versionCode 1
-                  versionName '0.1'
+                  versionCode 2
+                  versionName '0.2'
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -100,6 +100,8 @@ jobs:
           import android.os.Looper;
           import android.widget.Button;
           import android.widget.LinearLayout;
+          import android.widget.RadioButton;
+          import android.widget.RadioGroup;
           import android.widget.SeekBar;
           import android.widget.TextView;
           import rikka.shizuku.Shizuku;
@@ -129,7 +131,10 @@ jobs:
                   super.onCreate(b);
                   final SharedPreferences sp = getSharedPreferences("bf", MODE_PRIVATE);
                   int vol = sp.getInt("vol", 70);
+                  int type = sp.getInt("type", 0);
+                  if (type < 0 || type > 2) type = 0;
                   SoundService.volume = vol / 100f;
+                  SoundService.soundType = type;
 
                   int pad = (int) (24 * getResources().getDisplayMetrics().density);
                   LinearLayout root = new LinearLayout(this);
@@ -169,12 +174,31 @@ jobs:
                       @Override public void onStopTrackingTouch(SeekBar s) { }
                   });
 
+                  TextView typeLabel = new TextView(this);
+                  typeLabel.setText("Jenis suara");
+                  RadioGroup rg = new RadioGroup(this);
+                  String[] names = {"Pensil", "Pensil halus", "Kuas basah"};
+                  for (int i = 0; i < names.length; i++) {
+                      RadioButton rb = new RadioButton(this);
+                      rb.setText(names[i]);
+                      rb.setId(100 + i);
+                      rg.addView(rb);
+                  }
+                  rg.check(100 + type);
+                  rg.setOnCheckedChangeListener((g, id) -> {
+                      int t = id - 100;
+                      SoundService.soundType = t;
+                      sp.edit().putInt("type", t).apply();
+                  });
+
                   root.addView(title);
                   root.addView(msg);
                   root.addView(start);
                   root.addView(stop);
                   root.addView(volLabel);
                   root.addView(sb);
+                  root.addView(typeLabel);
+                  root.addView(rg);
                   root.addView(info);
                   setContentView(root);
 
@@ -237,6 +261,7 @@ jobs:
 
           public class SoundService extends Service {
               public static volatile float volume = 0.7f;
+              public static volatile int soundType = 0;
               public static volatile String status = "Belum jalan";
               public static volatile long events = 0;
 
@@ -411,20 +436,44 @@ jobs:
 
                   Random rnd = new Random();
                   short[] buf = new short[chunk];
-                  float env = 0f, lp = 0f, tex = 0f;
+                  float env = 0f, lp = 0f, lpA = 0f, lpB = 0f, tex = 0f;
                   while (running) {
                       long now = System.nanoTime();
                       boolean moving = lastMoveNs != 0 && (now - lastMoveNs) < 70_000_000L;
                       float target = moving ? level : 0f;
                       float vol = volume;
+                      int type = soundType;
+                      float atk = 0.01f;
+                      float rel = 0.003f;
+                      if (type == 2) {
+                          atk = 0.005f;
+                          rel = 0.0015f;
+                      }
                       for (int i = 0; i < chunk; i++) {
-                          env += (target - env) * (target > env ? 0.01f : 0.003f);
+                          env += (target - env) * (target > env ? atk : rel);
                           float n = rnd.nextFloat() * 2f - 1f;
-                          lp += 0.2f * (n - lp);
-                          float hp = n - lp;
-                          tex += 0.01f * ((rnd.nextFloat() * 2f - 1f) - tex);
-                          float mod = 0.5f + 12f * Math.abs(tex);
-                          float s = hp * mod * env * vol * 0.9f;
+                          float r2 = rnd.nextFloat() * 2f - 1f;
+                          float s;
+                          if (type == 1) {
+                              lp += 0.45f * (n - lp);
+                              float hp = n - lp;
+                              tex += 0.01f * (r2 - tex);
+                              float mod = 0.7f + 6f * Math.abs(tex);
+                              s = hp * mod * env * vol * 0.8f;
+                          } else if (type == 2) {
+                              lpA += 0.25f * (n - lpA);
+                              lpB += 0.03f * (n - lpB);
+                              float band = lpA - lpB;
+                              tex += 0.002f * (r2 - tex);
+                              float mod = 0.55f + 18f * Math.abs(tex);
+                              s = band * mod * env * vol * 2.0f;
+                          } else {
+                              lp += 0.2f * (n - lp);
+                              float hp = n - lp;
+                              tex += 0.01f * (r2 - tex);
+                              float mod = 0.5f + 12f * Math.abs(tex);
+                              s = hp * mod * env * vol * 0.9f;
+                          }
                           if (s > 1f) s = 1f;
                           if (s < -1f) s = -1f;
                           buf[i] = (short) (s * 32767f);
